@@ -1,4 +1,4 @@
-import torrent_parser as tp
+#import torrent_parser as tp
 import sys,requests,hashlib,bencodepy,random
 import socket
 from urllib.parse import urlparse
@@ -8,13 +8,15 @@ from threading import *
 import logging
 import math
 import time
+import decoding
 
 f = open(sys.argv[1] , "rb")
 met = bencodepy.decode(f.read())
 meta = {}
 for key, val in met.items():
 	meta[key.decode()] = val	
-metadata = tp.parse_torrent_file(sys.argv[1])
+#metadata = tp.parse_torrent_file(sys.argv[1])
+metadata = decoding.decode_torrent(sys.argv[1])
 info_digest = hashlib.sha1(bencodepy.encode(meta['info'])).digest()
 #print(info_digest)
 
@@ -41,7 +43,7 @@ peers = []
 torrent_par={
 	"max_d_speed": 0,
 	"max_u_speed": 0,
-	"pieces_downloaed": 0,
+	"pieces_downloaded": 0,
 	"download_location":"",
 	"upload_location":""
 }
@@ -447,7 +449,7 @@ def peer_communication(ip, port, par, peer_index, torrent_par):
 							if(block_hash == metadata['info']['pieces'][index]):
 								received_pieces[index]["done"] = True
 								received_pieces[index]["downloading"] = False
-								torrent_par['pieces_downloaed'] = torrent_par['pieces_downloaed'] + 1
+								torrent_par['pieces_downloaded'] += 1
 								break
 							else:
 								received_pieces[index]["begin"] = 0
@@ -464,7 +466,7 @@ def peer_communication(ip, port, par, peer_index, torrent_par):
 							if(block_hash == metadata['info']['pieces'][index]):
 								received_pieces[index]["done"] = True
 								received_pieces[index]["downloading"] = False	
-								torrent_par['pieces_downloaed'] = torrent_par['pieces_downloaed'] + 1
+								torrent_par['pieces_downloaded'] += 1
 								break
 							else:
 								received_pieces[index]["begin"] = 0
@@ -510,7 +512,7 @@ get_all_peers(metadata,par)
 						
 print("Got",len(peers),"peers... :-)")
 
-while(torrent_par['pieces_downloaed'] != len(metadata['info']['pieces'])):
+while(torrent_par['pieces_downloaded'] != len(metadata['info']['pieces'])):
 	peer_threads = []
 
 	for peer in peers:
