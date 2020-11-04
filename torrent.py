@@ -31,8 +31,6 @@ par = {
 
 received_pieces = [{"index": i, "done" : False, "downloading" : False, "begin": 0 , "downloading_peer": None, "available": 0, "count": 0 } for i in range(0,len(metadata['info']['pieces']))]
 rarest_pieces = []
-t_lock = Lock() 
-rarest_lock = Lock()
 
 create = open(metadata['info']['name'],"w")
 create.close()
@@ -48,16 +46,39 @@ torrent_par={
 	"upload_location":""
 }
 
+t_lock = Lock() # lock for received pieces list
+rarest_lock = Lock() # losck for rarest piece list
+p_lock = Lock()	#lock for peers list
+
 def http_tracker(url, par):
+	global peers
 	try:
-		response = requests.get(url, params = par)
-		return response	
+		response = requests.get(url, params = par,timeout = 10)
+		if(response):
+			#print(bencodepy.decode(response.content),response)
+			tmp,peer_data = {}, bencodepy.decode(response.content)
+				
+			for key, val in peer_data.items():
+				tmp[key.decode()] = val
+				
+			peer_data = tmp
+			p_lock.acquire()	
+			for peer in peer_data['peers']:
+				tmp = {}
+				for key, val in peer.items():
+					tmp[key.decode()] = val		
+				del tmp['peer id']
+				tmp['ip'] = tmp['ip'].decode()
+				peers.append(tmp)
+			p_lock.release()		
 	except Exception as e:
-		print("Error reaching", url)
+		print("Error reaching http tracker", url)
 		print(e)
 		return None	
 	
+
 def udp_tracker(domain, port, par):
+	global peers
 	'''Connection Request and Response'''
 	protocol_id = 0x41727101980
 	action  = 0  #connection
@@ -105,124 +126,59 @@ def udp_tracker(domain, port, par):
 			n = int((len(data)-20) / 6)
 			#print(unpack("!iiiii"+(n*'IH'),data))
 			res = unpack("!"+n*'BBBBH',data[20:])
-			peers = []
+			#peers = []
+			p_lock.acquire()
 			for x in range(0,len(res),5):
 				i1,i2,i3,i4,port = res[x:x+5]
 				ip = str(i1)+"."+str(i2)+"."+str(i3)+"."+str(i4)
 				peers.append({'ip':ip, 'port':port})
-			return peers	
+			p_lock.release()	
+			#return peers	
 	except Exception as e:
 		print("No response for announce", domain, port)
 		print(str(e))
 		return None		
+	
 
 def get_all_peers(metadata, par):
 	url_p = urlparse(metadata['announce'])
-	peers = []
+	global peers
 	http_threads = []
 	udp_threads = []
 	if(url_p.scheme == 'http' or url_p.scheme == 'https'):
-		'''t = Thread(target = http_tracker, args = (metadata['announce'],par))
-		http_threads.append(t)'''
-		response = http_tracker(metadata['announce'],par)
-		#print((response.content))
-		if(response):
-			#print(bencodepy.decode(response.content),response)
-			tmp,peer_data = {}, bencodepy.decode(response.content)
-				
-			for key, val in peer_data.items():
-				tmp[key.decode()] = val
-				
-			peer_data = tmp
-				
-			for peer in peer_data['peers']:
-				tmp = {}
-				for key, val in peer.items():
-					tmp[key.decode()] = val		
-				del tmp['peer id']
-				tmp['ip'] = tmp['ip'].decode()
-				peers.append(tmp)
+		#http_tracker(metadata['announce'],par)
+		http_threads.append(Thread(target = http_tracker,args = (metadata['announce'],par)))
+		
 
 	elif(url_p.scheme == 'udp'):
 		domain, port = url_p.netloc.split(":")
-		'''t = Thread(target = udp_tracker, args = (domain,port,par))
-		udp_threads.append(t)'''
-		response = udp_tracker(domain,port,par)
-		#print(response)	
-		if(response):
-			#print(response)
-			peers = peers + response
+		#udp_tracker(domain,port,par)
+		udp_threads.append(Thread(target = udp_tracker, args = (domain,port,par)))
 
 	for tracker in metadata['announce-list']:
-		response = None
 		url_p = urlparse(tracker[0])
 		if(url_p.scheme == 'udp'):
 			domain, port = url_p.netloc.split(":")
-			'''t = Thread(target = udp_tracker, args = (domain,port,par))
-			udp_threads.append(t)'''
-			response = udp_tracker(domain,port,par)
-			if(response):
-				#print(response)
-				peers = peers + response
-				#peer_communication(response,par)
+			#udp_tracker(domain,port,par)
+			udp_threads.append(Thread(target = udp_tracker, args = (domain,port,par)))
+			
 		elif(url_p.scheme == 'https' or url_p.scheme == 'http'):
-			response = http_tracker(tracker[0], par)
-			'''t = Thread(target = http_tracker, args = (metadata['announce'],par))
-			http_threads.append(t)'''
-			if(response):
-				#print(bencodepy.decode(response.content),response)
-				tmp,peer_data = {}, bencodepy.decode(response.content)
-				
-				for key, val in peer_data.items():
-					tmp[key.decode()] = val
-				
-				peer_data = tmp
-				
-				for peer in peer_data['peers']:
-					tmp = {}
-					for key, val in peer.items():
-						tmp[key.decode()] = val	
-					del tmp['peer id']
-					tmp['ip'] = tmp['ip'].decode()
-					peers.append(tmp)
-				#peer_communication(peer_data,par)
-	'''for t in http_threads:
-		t.start()
-	for t in udp_threads:
-		t.start()	
-	for t in http_threads:
-		response = t.join()
-		print("response is",response)
-		if(response):
-			#print(bencodepy.decode(response.content),response)
-			tmp,peer_data = {}, bencodepy.decode(response.content)
-			
-			for key, val in peer_data.items():
-				tmp[key.decode()] = val
-			
-			peer_data = tmp
-			
-			for peer in peer_data['peers']:
-				tmp = {}
-				for key, val in peer.items():
-					tmp[key.decode()] = val	
-				del tmp['peer id']
-				tmp['ip'] = tmp['ip'].decode()
-				peers.append(tmp)
+			#http_tracker(tracker[0], par)
+			http_threads.append(Thread(target = http_tracker,args = (tracker[0], par)))
 
-	for t in udp_threads:
-		response = t.join()
-		print("response is",response)
-		if(response):
-			#print(response)
-			peers = peers + response'''			
-	
+	for h in http_threads:
+		h.start()
+	for u in udp_threads:
+		u.start()
+	for h in http_threads:
+		h.join()
+	for u in udp_threads:
+		u.join()			
 	tmp = []
 	for peer in peers:
 		if peer not in tmp:
 			tmp.append(peer)
-	peers = tmp					
-	return peers
+	peers = tmp	
 
 def peer_communication(ip, port, par, peer_index, torrent_par):
 	print(ip, port)
@@ -250,7 +206,7 @@ def peer_communication(ip, port, par, peer_index, torrent_par):
 		state = 0
 		alive = 1
 		bitfield = b''
-
+		index = 0
 		while(alive):
 			print("state=",state)
 
@@ -337,9 +293,13 @@ def peer_communication(ip, port, par, peer_index, torrent_par):
 			t1 = time.time()
 			res = sock.recv(2**20)
 			t2 = time.time()
-			actual_time = t2-t1
-			required_time = (len(res)/1000)/torrent_par['max_d_speed']
-			if(required_time > actual_time)
+			if(torrent_par['max_d_speed'] != 0):
+				actual_time = t2-t1
+				required_time = (len(res)/1000)/torrent_par['max_d_speed']
+				if(required_time > actual_time):
+					time.sleep(required_time - actual_time)
+					t2 = time.time()	
+
 			if(peers[peer_index]['d_speed'] == 0):
 				peers[peer_index]['d_speed'] = ((len(res) * 0.001)/(t2 - t1))  
 			else: 
@@ -395,12 +355,18 @@ def peer_communication(ip, port, par, peer_index, torrent_par):
 						t1 = time.time()
 						bit_c = sock.recv(4096)
 						t2 = time.time()
+						if(torrent_par['max_d_speed'] != 0):
+							actual_time = t2-t1
+							required_time = (len(bit_c)/1000)/torrent_par['max_d_speed']
+							if(required_time > actual_time):
+								time.sleep(required_time - actual_time)
+								t2 = time.time()
+
 						if(peers[peer_index]['d_speed'] == 0):
 							peers[peer_index]['d_speed'] = ((len(bit_c) * 0.001)/(t2 - t1))  
 						else: 
 							peers[peer_index]['d_speed'] = round((peers[peer_index]['d_speed'] + ((len(bit_c) * 0.001)/(t2 - t1)))/2,3)
 						
-
 						if(len(bit_c) > bit_rem):
 							bitfield = bitfield + unpack(str(bit_rem) + 's', bit_c[:bit_rem])[0]
 							res = bit_c[bit_rem:]
@@ -445,6 +411,13 @@ def peer_communication(ip, port, par, peer_index, torrent_par):
 						t1 = time.time()
 						block_c = sock.recv(2**16)
 						t2 = time.time()
+						if(torrent_par['max_d_speed'] != 0):
+							actual_time = t2-t1
+							required_time = (len(block_c)/1000)/torrent_par['max_d_speed']
+							if(required_time > actual_time):
+								time.sleep(required_time - actual_time)
+								t2 = time.time()
+
 						if(peers[peer_index]['d_speed'] == 0):
 							peers[peer_index]['d_speed'] = ((len(block_c) * 0.001)/(t2 - t1))  
 						else: 
@@ -532,7 +505,9 @@ def seed(top4 , par ):
 
 print(len(metadata['info']['pieces']))
 print("Getting peer information from trackers...")
-peers = get_all_peers(metadata,par)			
+
+get_all_peers(metadata,par)	
+						
 print("Got",len(peers),"peers... :-)")
 
 while(torrent_par['pieces_downloaed'] != len(metadata['info']['pieces'])):
@@ -542,7 +517,7 @@ while(torrent_par['pieces_downloaed'] != len(metadata['info']['pieces'])):
 		peer['d_speed'] = 0
 
 	for peer in peers:
-			peer_threads.append(Thread(target = peer_communication, args = (peer['ip'],peer['port'],par, peers.index(peer))))
+			peer_threads.append(Thread(target = peer_communication, args = (peer['ip'],peer['port'],par, peers.index(peer),torrent_par)))
 			#peer_communication(peer['ip'],peer['port'],par)
 	for peer_t in peer_threads:
 		peer_t.start()
@@ -554,6 +529,7 @@ print("----------------------------------TOP 4 PEERS----------------------------
 for x in sorted(peers, key = lambda k: k['d_speed'], reverse = True)[:4]:
 	print(x['ip'],"Download speed is",x['d_speed'],"Kbps")
 
-
-
+print("----------------------------------RAREST PIECES------------------------------------")
+for x in rarest_pieces:
+	print(x['index'],end = " ")
 			
