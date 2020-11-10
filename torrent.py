@@ -385,7 +385,7 @@ def peer_communication(ip, port, par, peer_index, torrent_par):
 					if(len(res) >= length-1):
 						bitfield = unpack(str(length-1)+'s',res[:length-1])[0]
 						res = res[length:]
-						print(bitfield)
+						#print(bitfield)
 						state = 2
 						break
 					else:	
