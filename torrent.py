@@ -9,44 +9,79 @@ import logging
 import math
 import time
 import decoding
+import string
+import os
+
+#general torrent settings
+torrent_par={
+	"max_d_speed": 0,
+	"max_u_speed": 0,
+	"pieces_downloaded": 0,
+	"download_location":os.getcwd()+"/",
+	"upload_location":""
+}
+
+if(len(sys.argv )<2):
+	print("Invalid arguments")
+	sys.exit(1)
+else:
+	if(not os.path.isfile(sys.argv[1])):
+		raise Exception()
+	try:
+		for i in range(2,len(sys.argv),2):
+			if(sys.argv[i] == '-d'):
+				print(int(sys.argv[i+1]))
+				torrent_par['max_d_speed'] = int(sys.argv[i+1])
+			if(sys.argv[i] == '-l'):
+				if(os.path.isdir(sys.argv[i+1])):
+					torrent_par["download_location"] = sys.argv[i+1] + "/"	
+				else:
+					raise Exception() 
+	except Exception as e:
+		logging.exception(e)
+		print("Invalid args")
+		sys.exit(1)		
 
 f = open(sys.argv[1] , "rb")
 met = bencodepy.decode(f.read())
 meta = {}
 for key, val in met.items():
 	meta[key.decode()] = val	
-#metadata = tp.parse_torrent_file(sys.argv[1])
+
 metadata = decoding.decode_torrent(sys.argv[1])
 info_digest = hashlib.sha1(bencodepy.encode(meta['info'])).digest()
-#print(info_digest)
 
-
+#random generated peer id for this client
+PEER_ID = ''.join(random.choice(string.digits) for i in range(0))
+#port number this client is goinf to listen on for request from other peers
+PORT_NO = 6881
 
 par = {
 	"info_hash": info_digest,
-	"peer_id" : "12345678901234567890",
+	"peer_id" : PEER_ID,
 	"uploaded" : 0,
 	"downloaded" : 0,
 	"left":metadata['info']['length'],
-	"port":6881
+	"port":PORT_NO
 }
 
+#This list keeps track of all pieces related information
 received_pieces = [{"index": i, "done" : False, "downloading" : False, "begin": 0 , "downloading_peer": None, "available": 0, "count": 0 } for i in range(0,len(metadata['info']['pieces']))]
+
+#A sorted list of pieces dpending on availablity of these pieces among the peers
 rarest_pieces = []
 
-create = open(metadata['info']['name'],"w")
-create.close()
-downloading_file = open(metadata['info']['name'],"rb+")
+# Opening torrent file.
+try:
+	downloading_file = open(torrent_par['download_location']+metadata['info']['name'],"rb+")	
+except:
+	create = open(torrent_par['download_location']+metadata['info']['name'],"w")
+	create.close()
+	downloading_file = open(torrent_par['download_location']+metadata['info']['name'],"rb+")
 
+#List of all peers retuened by the tracker
 peers = []
 
-torrent_par={
-	"max_d_speed": 0,
-	"max_u_speed": 0,
-	"pieces_downloaded": 0,
-	"download_location":"",
-	"upload_location":""
-}
 
 t_lock = Lock() # lock for received pieces list
 rarest_lock = Lock() # losck for rarest piece list
@@ -55,7 +90,7 @@ p_lock = Lock()	#lock for peers list
 def http_tracker(url, par):
 	global peers
 	try:
-		response = requests.get(url, params = par,timeout = 10)
+		response = requests.get(url, params = par, timeout = 10)
 		if(response):
 			#print(bencodepy.decode(response.content),response)
 			tmp,peer_data = {}, bencodepy.decode(response.content)
@@ -63,19 +98,19 @@ def http_tracker(url, par):
 			for key, val in peer_data.items():
 				tmp[key.decode()] = val
 				
-			peer_data = tmp
-			p_lock.acquire()	
+			peer_data = tmp	
 			for peer in peer_data['peers']:
 				tmp = {}
 				for key, val in peer.items():
 					tmp[key.decode()] = val		
 				del tmp['peer id']
 				tmp['ip'] = tmp['ip'].decode()
+				p_lock.acquire()
 				peers.append(tmp)
-			p_lock.release()		
+				p_lock.release()		
 	except Exception as e:
-		print("Error reaching http tracker", url)
-		print(e)
+		#print("Error reaching http tracker", url)
+		#print(e)
 		return None	
 	
 
@@ -96,15 +131,15 @@ def udp_tracker(domain, port, par):
 	try:
 		sock.sendto(data,(domain,int(port)))
 	except Exception as e:
-		print("Could not connect to tracker", domain, port)
-		print(str(e))
+		#print("Could not connect to tracker", domain, port)
+		#print(str(e))
 		return None	
 	try:
 		data, server = sock.recvfrom(1024)
 		#print(unpack('!iiq',data))
 		action,transaction_id,connection_id = unpack('!iiq',data)	
 	except:
-		print("No response")
+		#print("No response")
 		return None
 
 	''' IPV4 Announce Request and Response'''
@@ -116,8 +151,8 @@ def udp_tracker(domain, port, par):
 	try:
 		sock.sendto(data,(domain,int(port)))
 	except Exception as e:
-		print("Could not connect to tracker",domain,port)
-		print(str(e))
+		#print("Could not connect to tracker",domain,port)
+		#print(str(e))
 		return None
 	try:
 		data, server = sock.recvfrom(1024)
@@ -137,8 +172,8 @@ def udp_tracker(domain, port, par):
 			p_lock.release()	
 			#return peers	
 	except Exception as e:
-		print("No response for announce", domain, port)
-		print(str(e))
+		#print("No response for announce", domain, port)
+		#print(str(e))
 		return None		
 	
 
@@ -183,7 +218,8 @@ def get_all_peers(metadata, par):
 	peers = tmp	
 
 def peer_communication(ip, port, par, peer_index, torrent_par):
-	print(ip, port)
+	global rarest_pieces
+	#print(ip, port)
 	peer_id = b''
 	if type(ip) is bytes:
 		ip = ip.decode()
@@ -191,11 +227,11 @@ def peer_communication(ip, port, par, peer_index, torrent_par):
 	sock.settimeout(30)
 	try:
 		sock.connect((ip,port))
-		print("connected to ..",ip,port)
+		#print("connected to ..",ip,port)
 		
 	except Exception as e:
-		print("Could not connect to peer...")
-		print(e)
+		#print("Could not connect to peer...")
+		#print(e)
 		return
 
 	try:
@@ -210,7 +246,7 @@ def peer_communication(ip, port, par, peer_index, torrent_par):
 		bitfield = b''
 		index = 0
 		while(alive):
-			print("state=",state)
+			#print("state=",state)
 
 			if(state == 0):
 				ch = chr(19)			
@@ -235,17 +271,17 @@ def peer_communication(ip, port, par, peer_index, torrent_par):
 				rarest_lock.release()	
 				msg = pack('!IB',1,2)
 				try:
-					print("Sending interested...")
+					#print("Sending interested...")
 					sock.send(msg)
 				except Exception as e:
-					print("Error while sending interested message")
-					print(e)
+					#print("Error while sending interested message")
+					#print(e)
+					pass
 
 			if(state == 3):
 				
 				flag = True
-				# check which the bitfield for available bits
-				
+
 				for k in range(0, len(rarest_pieces)):
 					#p =1
 					p = math.floor(rarest_pieces[k]['index']/8) + 1
@@ -289,6 +325,9 @@ def peer_communication(ip, port, par, peer_index, torrent_par):
 				if(flag):
 					alive = 0
 					break
+				
+				# send piece request
+					
 				msg = pack('!IBIII',13,6,index,begin,piece_len)		
 				sock.send(msg)
 					
@@ -307,19 +346,20 @@ def peer_communication(ip, port, par, peer_index, torrent_par):
 			else: 
 				peers[peer_index]['d_speed'] = round((peers[peer_index]['d_speed'] + ((len(res) * 0.001)/(t2 - t1)))/2,3)
 			
-			print(len(res))
+			#print(len(res))
 			
 			if(len(res) == 0):
 				raise Exception("Connection lost ...")
 				state = 0
 				continue
 				#raise Exception("Connection error")
+			
 			if(state == 0):
 				if len(res) < 68:
 					break
 				else:
 					handshake = unpack('!s19sii20s20s',res[:68])
-					print(handshake[5])
+					#print(handshake[5])
 					peer_id = handshake[5]
 					state = 1
 					res = res[68:]
@@ -333,10 +373,13 @@ def peer_communication(ip, port, par, peer_index, torrent_par):
 				typ = unpack("!B",res[4:5])[0]
 				res = res[5:]
 
-				print(length,typ)
+				#print(length,typ)
+
+				#type 0 choke
 				if(typ == 0):
 					alive = 0
 					break
+				
 				#type 5 bitfield
 				if(typ == 5):
 					if(len(res) >= length-1):
@@ -347,7 +390,7 @@ def peer_communication(ip, port, par, peer_index, torrent_par):
 						break
 					else:	
 						bitfield = unpack(str(len(res))+'s', res)[0]
-					print(bitfield)
+					#print(bitfield)
 					
 					bit_rem = length-1 - len(res)
 					
@@ -376,12 +419,12 @@ def peer_communication(ip, port, par, peer_index, torrent_par):
 						else:
 							bitfield = bitfield + unpack(str(len(bit_c))+'s', bit_c)[0]
 							bit_rem = bit_rem - len(bit_c)	
-					print(bitfield)	
-					print(len(bitfield))
+					#print(bitfield)	
+					#print(len(bitfield))
 						
-					if(math.floor(math.log(len(bitfield)*8,2))-1 == math.floor(math.log(len(metadata['info']['pieces']),2))):
-						state = 2
-
+					if(math.ceil(math.log(len(bitfield)*8,2)) == math.ceil(math.log(len(metadata['info']['pieces']),2))):
+						state = 2		
+						
 				# type 1 = unchoke
 				if(typ == 1):
 					state = 3
@@ -395,7 +438,7 @@ def peer_communication(ip, port, par, peer_index, torrent_par):
 					rem_piece_len = length -9
 					index, begin = unpack('!II',res[:8])
 
-					print("receiving block ",index,"begin at",begin,"of length",length-9)
+					#print("receiving block ",index,"begin at",begin,"of length",length-9)
 
 					res = res[8:]
 
@@ -434,8 +477,7 @@ def peer_communication(ip, port, par, peer_index, torrent_par):
 							rem_piece_len = rem_piece_len - len(block_c)
 					
 					write_piece(index,begin,block)
-					print("Received block length", len(block))
-					#received_pieces[index]['piece'] = received_pieces[index]['piece'] + block
+					#print("Received block length", len(block))
 
 					received_pieces[index]['begin'] = received_pieces[index]['begin'] + len(block) 
 					
@@ -443,9 +485,9 @@ def peer_communication(ip, port, par, peer_index, torrent_par):
 						if(received_pieces[index]['begin'] == (metadata['info']['length'] - (index * metadata['info']['piece length']))):
 							
 							block_hash = hashlib.sha1(read_piece(index)).hexdigest()
-							print(block_hash)
+							#print(block_hash)
 
-							print(metadata['info']['pieces'][index])
+							#print(metadata['info']['pieces'][index])
 							if(block_hash == metadata['info']['pieces'][index]):
 								received_pieces[index]["done"] = True
 								received_pieces[index]["downloading"] = False
@@ -460,9 +502,9 @@ def peer_communication(ip, port, par, peer_index, torrent_par):
 						if(received_pieces[index]['begin'] == metadata['info']['piece length']):
 							
 							block_hash = hashlib.sha1(read_piece(index)).hexdigest()
-							print(block_hash)
+							#print(block_hash)
 
-							print(metadata['info']['pieces'][index])
+							#print(metadata['info']['pieces'][index])
 							if(block_hash == metadata['info']['pieces'][index]):
 								received_pieces[index]["done"] = True
 								received_pieces[index]["downloading"] = False	
@@ -476,7 +518,7 @@ def peer_communication(ip, port, par, peer_index, torrent_par):
 					
 	except Exception as e:
 		received_pieces[index]["downloading"] = False
-		logging.exception(e)				
+		#logging.exception(e)				
 
 def write_piece(index,begin,block):
 	downloading_file.seek((index * metadata['info']['piece length'])+begin,0)
@@ -491,28 +533,22 @@ def read_piece(index):
 		piece = downloading_file.read( metadata['info']['piece length'])
 	return piece	
 
-#----------------------------------------------SEEDING--------------------------------------------------------------------------#
+def print_progress():
+	global torrent_par
+	progress = 0
+	while(progress != 100):
+		progress = round(torrent_par['pieces_downloaded']/len(metadata['info']['pieces'])*100,2)
+		print("Downloaded", progress,"%", end = "\r")
+		time.sleep(0.2)
 
-def seed(top4 , par ):
-	seedPort = par['port']
-	seed_sock = socket(AF_INET,SOCK_STREAM)
-	try:
-		seed_sock.bind(('',seedPort))
-	except:
-		print("Could not connect to the port", sys.argv[1])
-		sys.exit()	
-	seed_sock.listen(5)
-	
-	
-
-print(len(metadata['info']['pieces']))
-print("Getting peer information from trackers...")
-
-get_all_peers(metadata,par)	
-						
-print("Got",len(peers),"peers... :-)")
+#print(len(metadata['info']['pieces']))
 
 while(torrent_par['pieces_downloaded'] != len(metadata['info']['pieces'])):
+	
+	print("Getting peer information from trackers...")
+	get_all_peers(metadata,par)						
+	print("Got",len(peers),"peers... :-)")
+
 	peer_threads = []
 
 	for peer in peers:
@@ -521,6 +557,8 @@ while(torrent_par['pieces_downloaded'] != len(metadata['info']['pieces'])):
 	for peer in peers:
 			peer_threads.append(Thread(target = peer_communication, args = (peer['ip'],peer['port'],par, peers.index(peer),torrent_par)))
 			#peer_communication(peer['ip'],peer['port'],par)
+	print("Started downloading...")
+	Thread(target = print_progress).start()	
 	for peer_t in peer_threads:
 		peer_t.start()
 
@@ -534,4 +572,6 @@ for x in sorted(peers, key = lambda k: k['d_speed'], reverse = True)[:4]:
 print("----------------------------------RAREST PIECES------------------------------------")
 for x in rarest_pieces:
 	print(x['index'],end = " ")
+
+print()	
 			
