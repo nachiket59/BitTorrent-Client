@@ -8,7 +8,7 @@ $ python3 torrent.py <torrentfilenaem> -l <download-location> -d <download-speed
 Torrent file name is required parameter other two are optional.
 # Dependancies
 ```sh
-$ pip install requests
-$ pip install bencode.py
+$ pip3 install requests
+$ pip3 install bencode.py
 ```
 
