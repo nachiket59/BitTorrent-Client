@@ -11,4 +11,4 @@ Torrent file name is required parameter other two are optional.
 $ pip3 install requests
 $ pip3 install bencode.py
 ```
-
+(Torrent is compatible with single file torrents)
