@@ -52,7 +52,8 @@ metadata = decoding.decode_torrent(sys.argv[1])
 info_digest = hashlib.sha1(bencodepy.encode(meta['info'])).digest()
 
 #random generated peer id for this client
-PEER_ID = ''.join(random.choice(string.digits) for i in range(0))
+PEER_ID = ''.join(random.choices(string.digits, k=20))
+#PEER_ID = '12345678909876543210'
 #port number this client is goinf to listen on for request from other peers
 PORT_NO = 6881
 
@@ -110,7 +111,7 @@ def http_tracker(url, par):
 				p_lock.release()		
 	except Exception as e:
 		#print("Error reaching http tracker", url)
-		#print(e)
+		#logging.exception(e)
 		return None	
 	
 
@@ -173,7 +174,7 @@ def udp_tracker(domain, port, par):
 			#return peers	
 	except Exception as e:
 		#print("No response for announce", domain, port)
-		#print(str(e))
+		
 		return None		
 	
 
@@ -210,13 +211,12 @@ def get_all_peers(metadata, par):
 	for h in http_threads:
 		h.join()
 	for u in udp_threads:
-		u.join()			
+		u.join()		
 	tmp = []
 	for peer in peers:
 		if peer not in tmp:
 			tmp.append(peer)
 	peers = tmp	
-
 def peer_communication(ip, port, par, peer_index, torrent_par):
 	global rarest_pieces
 	#print(ip, port)
@@ -559,6 +559,7 @@ while(torrent_par['pieces_downloaded'] != len(metadata['info']['pieces'])):
 			#peer_communication(peer['ip'],peer['port'],par)
 	print("Started downloading...")
 	Thread(target = print_progress).start()	
+	
 	for peer_t in peer_threads:
 		peer_t.start()
 
